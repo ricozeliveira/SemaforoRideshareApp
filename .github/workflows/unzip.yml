@@ -1,3 +1,4 @@
+ git push
 name: Unzip Project
 
 on:
@@ -6,28 +7,39 @@ on:
       - 'SemaforoRideshareApp_v6.zip'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   unzip:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write  # permite fazer commit no repo
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Unzip payload
+      - name: Verificar ZIP
         run: |
-          rm -rf SemaforoRideshareApp app build.gradle settings.gradle README.md .github/workflows/build.yml || true
-          unzip -o SemaforoRideshareApp_v6.zip
-          # o ZIP contém uma pasta "SemaforoRideshareApp" com tudo dentro
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add -A
-          git commit -m "Unzip v6 payload" || echo "Nada para commitar"
+          if [ ! -f SemaforoRideshareApp_v6.zip ]; then
+            echo "ZIP não encontrado na raiz do repositório."
+            exit 1
+          fi
 
-      - name: Ensure build workflow present
+      - name: Descompactar payload
         run: |
+          set -e
+          unzip -o SemaforoRideshareApp_v6.zip
+          # O ZIP contém uma pasta "SemaforoRideshareApp" com tudo dentro:
+          rsync -a --delete SemaforoRideshareApp/ .
+          rm -rf SemaforoRideshareApp
+
+          # Remover arquivos com nomes em PT que atrapalham
+          rm -f construir.gradle configuracoes.gradle configurações.gradle construir.yml
+
+          # Garantir que a pasta workflows existe
           mkdir -p .github/workflows
+
+      - name: Garantir build.yml
+        run: |
           cat > .github/workflows/build.yml <<'YAML'
           name: Build APK
           on:
@@ -60,9 +72,11 @@ jobs:
                     name: app-debug
                     path: app/build/outputs/apk/debug/app-debug.apk
           YAML
-          git add .github/workflows/build.yml
-          git commit -m "Ensure build workflow" || echo "Build workflow already there"
 
-      - name: Push changes
+      - name: Commit e push
         run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add -A
+          git commit -m "Unzip v6 + garantir build.yml" || echo "Nada para commitar"
           git push
