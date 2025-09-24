@@ -1,82 +1,78 @@
- git push
-name: Unzip Project
+name: Build APK
 
 on:
   push:
-    paths:
-      - 'SemaforoRideshareApp_v6.zip'
+    branches: [ "principal", "main", "master" ]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  unzip:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verificar ZIP
+      # 1) Se houver o ZIP na raiz, descompacta e aplica o projeto v6
+      - name: Unzip project if zip exists
         run: |
-          if [ ! -f SemaforoRideshareApp_v6.zip ]; then
-            echo "ZIP não encontrado na raiz do repositório."
-            exit 1
+          if [ -f SemaforoRideshareApp_v6.zip ]; then
+            echo "ZIP encontrado. Descompactando..."
+            unzip -o SemaforoRideshareApp_v6.zip
+            # O ZIP tem a pasta SemaforoRideshareApp com tudo dentro
+            rsync -a SemaforoRideshareApp/ .
+            rm -rf SemaforoRideshareApp
+            # Remove arquivos com nomes em PT que atrapalham
+            rm -f construir.gradle configuracoes.gradle "configurações.gradle" construir.yml || true
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
+            git add -A
+            git commit -m "Apply v6 payload from zip" || true
+          else
+            echo "Nenhum ZIP encontrado; seguindo com o conteúdo atual."
           fi
 
-      - name: Descompactar payload
+      # 2) Checagens mínimas do projeto
+      - name: Check project layout
         run: |
-          set -e
-          unzip -o SemaforoRideshareApp_v6.zip
-          # O ZIP contém uma pasta "SemaforoRideshareApp" com tudo dentro:
-          rsync -a --delete SemaforoRideshareApp/ .
-          rm -rf SemaforoRideshareApp
+          test -f settings.gradle || (echo "ERRO: settings.gradle não encontrado"; exit 1)
+          test -f build.gradle    || (echo "ERRO: build.gradle não encontrado"; exit 1)
+          test -d app             || (echo "ERRO: pasta app/ não encontrada"; exit 1)
+          ls -la
 
-          # Remover arquivos com nomes em PT que atrapalham
-          rm -f construir.gradle configuracoes.gradle configurações.gradle construir.yml
+      # 3) JDK + SDK Android
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
-          # Garantir que a pasta workflows existe
-          mkdir -p .github/workflows
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Garantir build.yml
+      # 4) Usa gradlew se existir; senão instala Gradle
+      - name: Prepare Gradle command
         run: |
-          cat > .github/workflows/build.yml <<'YAML'
-          name: Build APK
-          on:
-            push:
-              branches: [ "principal", "main", "master" ]
-            workflow_dispatch:
-          jobs:
-            build:
-              runs-on: ubuntu-latest
-              steps:
-                - name: Checkout code
-                  uses: actions/checkout@v4
-                - name: Set up JDK 17
-                  uses: actions/setup-java@v4
-                  with:
-                    distribution: 'temurin'
-                    java-version: '17'
-                - name: Install Android SDK
-                  uses: android-actions/setup-android@v3
-                - name: Install Gradle (no wrapper)
-                  run: |
-                    curl -sL https://services.gradle.org/distributions/gradle-8.7-bin.zip -o gradle.zip
-                    unzip -q gradle.zip
-                    echo "$PWD/gradle-8.7/bin" >> $GITHUB_PATH
-                - name: Build with Gradle
-                  run: gradle assembleDebug
-                - name: Upload APK
-                  uses: actions/upload-artifact@v4
-                  with:
-                    name: app-debug
-                    path: app/build/outputs/apk/debug/app-debug.apk
-          YAML
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            echo "./gradlew assembleDebug" > run_build.sh
+          else
+            curl -sL https://services.gradle.org/distributions/gradle-8.7-bin.zip -o gradle.zip
+            unzip -q gradle.zip
+            echo "$PWD/gradle-8.7/bin" >> $GITHUB_PATH
+            echo "gradle assembleDebug" > run_build.sh
+          fi
+          chmod +x run_build.sh
 
-      - name: Commit e push
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add -A
-          git commit -m "Unzip v6 + garantir build.yml" || echo "Nada para commitar"
-          git push
+      # 5) Compila
+      - name: Build APK
+        run: bash run_build.sh
+
+      # 6) Publica o APK como artefato
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
